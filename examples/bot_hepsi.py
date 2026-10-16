@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from micup import Bot, MicupAPIError
 
@@ -37,6 +37,7 @@ VOICE_CHANNEL_ID = AYAR["MICUP_VOICE_CHANNEL_ID"]
 AUTO_ROLE_ID = AYAR["MICUP_AUTO_ROLE_ID"]
 WELCOME_CHANNEL_ID = AYAR.get("MICUP_WELCOME_CHANNEL_ID", "")  # boşsa hoşgeldin mesajı atılmaz
 UPDATE_CHANNEL_ID = AYAR.get("MICUP_UPDATE_CHANNEL_ID", "")    # güncelleme duyurusu kanalı
+ADMIN_IDS = {x.strip() for x in AYAR.get("MICUP_ADMIN_IDS", "").split(",") if x.strip()}
 
 log = logging.getLogger("bot_hepsi")
 
@@ -94,10 +95,10 @@ async def yeni_uye(data):
     if not user_id or user.get("bot"):
         return
     try:
-        await bot.rest("PUT", f"/guilds/{GUILD_ID}/members/{user_id}/roles/{AUTO_ROLE_ID}")
+        await bot.add_role(GUILD_ID, user_id, AUTO_ROLE_ID)
         log.info("Rol verildi: %s", user_id)
     except MicupAPIError as e:
-        log.warning("Rol verilemedi (%s): %s %s", user_id, e.code, e.message)
+        log.warning("Rol verilemedi (%s): %s", user_id, _hata_metni(e))
 
 
 @bot.on("guild_member_add")
@@ -128,13 +129,14 @@ async def hos_geldin(data):
 # ---------------------------------------------------------------------------
 # Moderasyon komutları
 #   !ban <kullanıcı_id> [sebep]
+#   !unban <kullanıcı_id>
 #   !kick <kullanıcı_id>
 #   !mute <kullanıcı_id> <dakika>     (1 - 40320 dk, yani en fazla 28 gün)
 #   !unmute <kullanıcı_id>
+#   !temizle [sayı]
+#   !surum
 # Sadece MICUP_ADMIN_IDS içindeki kullanıcılar kullanabilir (virgülle ayır).
 # ---------------------------------------------------------------------------
-
-ADMIN_IDS = {x.strip() for x in AYAR.get("MICUP_ADMIN_IDS", "").split(",") if x.strip()}
 
 
 def _kullanici_id(ham: str):
@@ -168,14 +170,27 @@ async def ban(msg):
     if not uid:
         return "Geçersiz kullanıcı ID'si."
     sebep = " ".join(msg.args[1:])[:512] or None
-    body = {"delete_message_seconds": 0}
-    if sebep:
-        body["reason"] = sebep
     try:
-        await bot.rest("PUT", f"/guilds/{GUILD_ID}/bans/{uid}", body)
+        await bot.ban(GUILD_ID, uid, reason=sebep)
     except MicupAPIError as e:
-        return f"Ban başarısız: {e.code}"
+        return f"Ban başarısız: {_hata_metni(e)}"
     return f"{uid} banlandı." + (f" Sebep: {sebep}" if sebep else "")
+
+
+@bot.command("!unban")
+async def unban(msg):
+    if not _yetkili(msg):
+        return "Bu komutu kullanma yetkin yok."
+    if not msg.args:
+        return "Kullanım: !unban <kullanıcı_id>"
+    uid = _kullanici_id(msg.args[0])
+    if not uid:
+        return "Geçersiz kullanıcı ID'si."
+    try:
+        await bot.unban(GUILD_ID, uid)
+    except MicupAPIError as e:
+        return f"Unban başarısız: {_hata_metni(e)}"
+    return f"{uid} banı kaldırıldı."
 
 
 @bot.command("!kick")
@@ -188,9 +203,9 @@ async def kick(msg):
     if not uid:
         return "Geçersiz kullanıcı ID'si."
     try:
-        await bot.rest("DELETE", f"/guilds/{GUILD_ID}/members/{uid}")
+        await bot.kick(GUILD_ID, uid)
     except MicupAPIError as e:
-        return f"Kick başarısız: {e.code}"
+        return f"Kick başarısız: {_hata_metni(e)}"
     return f"{uid} sunucudan atıldı."
 
 
@@ -209,11 +224,8 @@ async def mute(msg):
         return "Dakika bir sayı olmalı."
     if not 1 <= dakika <= 40320:
         return "Dakika 1 ile 40320 arasında olmalı (en fazla 28 gün)."
-    bitis = datetime.now(timezone.utc) + timedelta(minutes=dakika)
     try:
-        await bot.rest("PATCH", f"/guilds/{GUILD_ID}/members/{uid}", {
-            "communication_disabled_until": bitis.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
+        await bot.timeout(GUILD_ID, uid, minutes=dakika)
     except MicupAPIError as e:
         return f"Mute başarısız: {_hata_metni(e)}"
     return f"{uid} {dakika} dakika susturuldu."
@@ -229,26 +241,10 @@ async def unmute(msg):
     if not uid:
         return "Geçersiz kullanıcı ID'si."
     try:
-        await bot.rest("PATCH", f"/guilds/{GUILD_ID}/members/{uid}", {"communication_disabled_until": None})
+        await bot.clear_timeout(GUILD_ID, uid)
     except MicupAPIError as e:
-        return f"Unmute başarısız: {e.code}"
+        return f"Unmute başarısız: {_hata_metni(e)}"
     return f"{uid} susturması kaldırıldı."
-
-
-@bot.command("!unban")
-async def unban(msg):
-    if not _yetkili(msg):
-        return "Bu komutu kullanma yetkin yok."
-    if not msg.args:
-        return "Kullanım: !unban <kullanıcı_id>"
-    uid = _kullanici_id(msg.args[0])
-    if not uid:
-        return "Geçersiz kullanıcı ID'si."
-    try:
-        await bot.rest("DELETE", f"/guilds/{GUILD_ID}/bans/{uid}")
-    except MicupAPIError as e:
-        return f"Unban başarısız: {_hata_metni(e)}"
-    return f"{uid} banı kaldırıldı."
 
 
 @bot.command("!temizle")
@@ -261,26 +257,26 @@ async def temizle(msg):
         return "Kullanım: !temizle 10"
     n = max(1, min(n, 100))
     try:
-        mesajlar = await bot.get_messages(msg.channel_id, limit=n)
-        ids = [m.id for m in mesajlar]
-        if not ids:
-            return "Silinecek mesaj yok."
-        silinen = await bot.bulk_delete(msg.channel_id, ids)
+        silinen = await bot.purge(msg.channel_id, limit=n)
     except MicupAPIError as e:
         return f"Temizleme başarısız: {_hata_metni(e)}"
+    if not silinen:
+        return "Silinecek mesaj yok."
     return f"{silinen} mesaj silindi."
 
 
-SURUM_BASLIK = "micup 0.1.0 — İlk sürüm"
+SURUM_BASLIK = "micup 0.1.2 — Moderasyon, kanal ve sabitleme güncellemesi"
 SURUM_OZELLIKLER = [
-    ("Bağlantı", "Micup gateway'ine bağlanır, kopunca otomatik yeniden bağlanır (resume destekli)."),
-    ("Komutlar", "@bot.command(\"!komut\") ile komut tanımla. Dönen metin otomatik yanıt olarak gönderilir."),
-    ("Olaylar", "@bot.on(\"ready\" / \"message_create\" / ...) ile olay dinle. ignored_events ile gereksizleri kapat."),
-    ("Mesajlar", "send_message, edit_message, delete_message, bulk_delete, get_messages ve Message.reply/send/edit/delete."),
-    ("REST", "bot.rest(metod, yol, gövde) ile Micup HTTP API'sinin tamamına ham erişim."),
-    ("Ses", "voice.join / leave / update / get_states. join LiveKit odasına bağlanır."),
+    ("Moderasyon", "ban, unban, kick, timeout, clear_timeout, list_bans. Denetim nedeni (reason) destekleniyor."),
+    ("Roller ve ses", "add_role, remove_role, set_voice_mute, set_voice_deaf, disconnect_member, move_member."),
+    ("Kanallar", "create_channel, edit_channel, delete_channel, set_slowmode (0-21600 sn), purge."),
+    ("Sabitleme", "pin_message, unpin_message, list_pins."),
+    ("Tepkiler", "add_reaction, remove_own_reaction, remove_user_reaction, remove_emoji_reactions, remove_all_reactions, list_reaction_users."),
+    ("Dosyalar", "send_file ile mesaja dosya ekleme (10 MB'a kadar)."),
+    ("Denetim kaydı", "list_audit_logs ile sunucu denetim kayıtlarını okuma, AuditAction sabitleri."),
+    ("Ses çalma", "voice.play_wav ile sesli kanalda WAV dosyası çalma (16-bit PCM)."),
+    ("Mesajlar ve komutlar", "send_message, edit_message, delete_message, bulk_delete, get_messages, @bot.command, @bot.on."),
     ("Durum", "bot.set_presence(durum, afk, mobile, custom_status) ile durum ve özel metin."),
-    ("Yardımcılar", "Permissions (yetki bitleri), snowflake_to_datetime, MicupAPIError."),
 ]
 
 
@@ -293,7 +289,7 @@ async def surum(msg):
     embed = {
         "type": "rich",
         "title": SURUM_BASLIK,
-        "description": "İlk sürümde eklenen özellikler:",
+        "description": "Bu sürümde eklenen özellikler:",
         "color": 5793266,
         "fields": [{"name": ad, "value": aciklama, "inline": False} for ad, aciklama in SURUM_OZELLIKLER],
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

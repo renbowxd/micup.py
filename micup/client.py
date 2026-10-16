@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .constants import DEFAULT_IGNORED_EVENTS, DEFAULT_ORIGIN, FATAL_CLOSE_CODES, RATE_LIMIT_CLOSE_CODE, RESET_CLOSE_CODES, log
 from .errors import MicupAPIError
 from .models import Message, User
+from .overwrites import merge_overwrites
 from .voice import Voice
 
 
@@ -335,6 +336,37 @@ class Bot:
         if not 0 <= seconds <= 21600:
             raise ValueError("Yavaş mod 0 ile 21600 saniye arasında olmalı")
         return await self._request("PATCH", f"/v1/channels/{channel_id}", json={"rate_limit_per_user": seconds})
+
+    async def set_channel_permission(
+        self,
+        channel_id: str,
+        target_id: str,
+        *,
+        allow: int = 0,
+        deny: int = 0,
+        type: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Bir rol ya da üye için kanal iznini ayarlar (allow/deny bit maskeleri).
+
+        Önce kanalın mevcut izinlerini okur, yalnızca `target_id` girişini değiştirir, sonra tüm listeyi geri gönderir.
+        type: 0 rol, 1 üye. Verilmezse mevcut tip korunur, yoksa 0 kullanılır.
+        Bot kanalda MANAGE_ROLES (ya da MANAGE_CHANNELS) yetkisine ve hedef rolün üstünde bir role sahip olmalı.
+        Örnek: bot.set_channel_permission(kanal, rol, deny=Permissions.VIEW_CHANNEL)
+        """
+        channel = await self.get_channel(channel_id)
+        overwrites = merge_overwrites(
+            channel.get("permission_overwrites") or [], target_id,
+            allow=allow, deny=deny, type=type,
+        )
+        return await self._request("PATCH", f"/v1/channels/{channel_id}", json={"permission_overwrites": overwrites})
+
+    async def clear_channel_permission(self, channel_id: str, target_id: str) -> Dict[str, Any]:
+        """Bir rol ya da üye için kanal izin girişini tamamen kaldırır (varsayılan izinlere döner)."""
+        channel = await self.get_channel(channel_id)
+        overwrites = merge_overwrites(
+            channel.get("permission_overwrites") or [], target_id, remove=True,
+        )
+        return await self._request("PATCH", f"/v1/channels/{channel_id}", json={"permission_overwrites": overwrites})
 
     async def edit_channel(self, channel_id: str, **fields: Any) -> Dict[str, Any]:
         """Kanal ayarlarını değiştirir (name, topic, parent_id, rate_limit_per_user vb.).

@@ -6,7 +6,7 @@ from .permissions import Permissions
 from .utils import snowflake_to_datetime
 from .voice import Voice
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 __all__ = [
     "Bot", "Message", "User", "Voice", "Permissions", "AuditAction",
     "MicupAPIError", "MicupError", "snowflake_to_datetime",

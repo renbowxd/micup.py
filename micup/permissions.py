@@ -19,7 +19,7 @@ class Permissions:
     DEAFEN_MEMBERS = 1 << 23
     MOVE_MEMBERS = 1 << 24
     MANAGE_ROLES = 1 << 28
-    STREAM = 1 << 37
+    STREAM = 1 << 9   # Yayın (ekran paylaşımı / video). 1 << 37 harici çıkartma yetkisidir.
     PIN_MESSAGES = 1 << 51
 
     @staticmethod

@@ -270,9 +270,26 @@ class Bot:
         attachment = await self.upload_attachment(channel_id, path)
         return await self.send_message(channel_id, content, attachments=[attachment], **fields)
 
-    async def edit_message(self, channel_id: str, message_id: str, content: str) -> Message:
+    async def edit_message(
+        self,
+        channel_id: str,
+        message_id: str,
+        content: Optional[str] = None,
+        **fields: Any,
+    ) -> Message:
+        """Mesajı düzenler. `content` metni, `embeds` vb. alanlar (send_message ile aynı) değiştirilir.
+
+        Verilmeyen alanlar olduğu gibi kalır. Sadece embed güncellemek için content'i vermeden
+        `embeds=[...]` geçmek yeterli.
+        """
+        body: Dict[str, Any] = {k: v for k, v in fields.items() if v is not None}
+        if content is not None:
+            body["content"] = content
+        if not body:
+            raise ValueError("edit_message için en az content ya da bir alan (embeds vb.) verilmeli.")
+        body.setdefault("allowed_mentions", {"parse": []})
         data = await self._request(
-            "PATCH", f"/v1/channels/{channel_id}/messages/{message_id}", json={"content": content}
+            "PATCH", f"/v1/channels/{channel_id}/messages/{message_id}", json=body
         )
         return Message(data, self)
 

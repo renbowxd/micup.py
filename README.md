@@ -39,11 +39,7 @@ python bot.py
 - Durum: `bot.set_presence(...)`
 - Yetki bitleri ve snowflake yardımcıları
 
-<<<<<<< HEAD
 Ayrıntılı kullanım için [dokümantasyona](https://micup.renbow.dev) bak.
-=======
-Ayrıntılı kullanım için <a href="https://micup.renbow.dev">dokümantasyona</a> bak.
->>>>>>> f347f6f702b368a1733969e94a8fc3fb9e00a193
 
 ## Lisans
 

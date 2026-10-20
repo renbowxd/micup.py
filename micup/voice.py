@@ -217,7 +217,6 @@ class Voice:
         options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         publication = await room.local_participant.publish_track(track, options)
         try:
-            # 10 ms'lik kareler halinde gönder
             spc = rate // 100
             frame_bytes = spc * channels * 2
             for i in range(0, len(data), frame_bytes):

@@ -4,12 +4,14 @@ import logging
 import mimetypes
 import os
 import random
+import re
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 import aiohttp
 from typing import Any, Callable, Dict, List, Optional
 from .constants import DEFAULT_IGNORED_EVENTS, DEFAULT_ORIGIN, FATAL_CLOSE_CODES, RATE_LIMIT_CLOSE_CODE, RESET_CLOSE_CODES, log
 from .errors import MicupAPIError
+from .interactions import ComponentType, Interaction, InteractionType, MAX_CHOICES, MAX_OPTIONS
 from .models import Message, User
 from .overwrites import merge_overwrites
 from .voice import Voice
@@ -40,6 +42,7 @@ class Bot:
         self.presence = presence
 
         self.user: Optional[User] = None
+        self.application_id: Optional[str] = None
         self.session_id: Optional[str] = None
         self.sequence: Optional[int] = None
         self.voice = Voice(self)
@@ -53,6 +56,11 @@ class Bot:
         self._ready = False
         self._handlers: Dict[str, List[Callable]] = {}
         self._commands: Dict[str, Callable] = {}
+        self._slash: Dict[tuple, Dict[str, Any]] = {}
+        self._buttons: Dict[str, Callable] = {}
+        self._selects: Dict[str, Callable] = {}
+        self._modals: Dict[str, Callable] = {}
+        self._autocompletes: Dict[tuple, Callable] = {}
 
 
     def command(self, prefix: str):
@@ -60,6 +68,136 @@ class Bot:
             self._commands[prefix] = func
             return func
         return decorator
+
+    def slash(
+        self,
+        name: str,
+        *,
+        description: str,
+        options: Optional[List[Dict[str, Any]]] = None,
+        guild_id: Optional[str] = None,
+    ):
+        """Slash komutu tanımlar. guild_id verilirse yalnızca o sunucuda, verilmezse global.
+
+        Örnek:
+            @bot.slash("ping", description="Botu test eder")
+            async def ping(ia):
+                await ia.respond("pong", ephemeral=True)
+        """
+        if not (1 <= len(name) <= 32) or name != name.lower() or not all(
+            c.isalnum() or c in "-_" for c in name
+        ):
+            raise ValueError("Slash komut adı 1-32 karakter, küçük harf, rakam, _ ve - olabilir (Unicode harf serbest).")
+        if not (1 <= len(description) <= 100):
+            raise ValueError("Slash komut açıklaması 1-100 karakter olmalı.")
+        opts = list(options or [])
+        if len(opts) > MAX_OPTIONS:
+            raise ValueError(f"Bir komutta en fazla {MAX_OPTIONS} parametre olabilir.")
+        seen_optional = False
+        for o in opts:
+            if o.get("type") in (1, 2):
+                continue
+            if not o.get("required"):
+                seen_optional = True
+            elif seen_optional:
+                raise ValueError("Zorunlu parametreler isteğe bağlı parametrelerden önce gelmeli.")
+
+        def decorator(func: Callable):
+            self._slash[(name, guild_id)] = {
+                "name": name,
+                "description": description,
+                "options": list(options or []),
+                "func": func,
+            }
+            return func
+        return decorator
+
+    def button(self, custom_id: str):
+        """Bu custom_id ile gelen buton tıklamalarını işler. custom_id tam eşleşmelidir."""
+        def decorator(func: Callable):
+            self._buttons[custom_id] = func
+            return func
+        return decorator
+
+    def select(self, custom_id: str):
+        """Seçim menüsü seçimlerini işler. Seçilen değerler `ia.values` içindedir."""
+        def decorator(func: Callable):
+            self._selects[custom_id] = func
+            return func
+        return decorator
+
+    def modal(self, custom_id: str):
+        """Modal gönderimlerini işler. Alan değerleri `ia.modal_values` içindedir."""
+        def decorator(func: Callable):
+            self._modals[custom_id] = func
+            return func
+        return decorator
+
+    def autocomplete(self, command: str, option_name: str):
+        """Bir slash komutunun autocomplete parametresi yazılırken çağrılır.
+
+        Handler, [{"name": ..., "value": ...}, ...] listesi döndürmeli ya da `ia.respond_choices(...)` çağırmalı.
+        """
+        def decorator(func: Callable):
+            self._autocompletes[(command, option_name)] = func
+            return func
+        return decorator
+
+    def _application(self) -> str:
+        app = self.application_id or (self.user.id if self.user else None)
+        if not app:
+            raise RuntimeError("Bot hazır değil. Bu çağrıyı on('ready') içinde yap.")
+        return app
+
+    def _cmd_path(self, guild_id: Optional[str] = None, command_id: Optional[str] = None) -> str:
+        base = f"/v1/applications/{self._application()}"
+        if guild_id is not None:
+            base += f"/guilds/{guild_id}"
+        base += "/commands"
+        if command_id is not None:
+            base += f"/{command_id}"
+        return base
+
+    async def sync_commands(self, guild_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Tanımlı slash komutlarını Micup'a yazar (bulk overwrite).
+
+        guild_id None ise global komutlar, verilirse yalnızca o sunucuya ait komutlar yazılır.
+        Dakikada sınırlı sayıda çağrılabilir; komutlar değişmediyse her açılışta çağırmak gerekmez.
+        """
+        payload: List[Dict[str, Any]] = []
+        for (_, gid), entry in self._slash.items():
+            if gid != guild_id:
+                continue
+            item: Dict[str, Any] = {"name": entry["name"], "description": entry["description"], "type": 1}
+            if entry["options"]:
+                item["options"] = entry["options"]
+            payload.append(item)
+        return await self._request("PUT", self._cmd_path(guild_id), json=payload)
+
+    async def get_commands(self, guild_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Kayıtlı komutların listesi (global ya da sunucu)."""
+        return await self._request("GET", self._cmd_path(guild_id))
+
+    async def get_command(self, command_id: str, guild_id: Optional[str] = None) -> Dict[str, Any]:
+        """Tek bir komut bilgisi."""
+        return await self._request("GET", self._cmd_path(guild_id, command_id))
+
+    async def create_command(self, payload: Dict[str, Any], guild_id: Optional[str] = None) -> Dict[str, Any]:
+        """Tek bir komutu ekler ya da aynı isimdeyse değiştirir. payload: {"name", "description", "type": 1, "options": [...]}"""
+        return await self._request("POST", self._cmd_path(guild_id), json=payload)
+
+    async def edit_command(self, command_id: str, guild_id: Optional[str] = None, **fields: Any) -> Dict[str, Any]:
+        """Bir komutun verilen alanlarını değiştirir (name, description, options ...)."""
+        body = {k: v for k, v in fields.items() if v is not None}
+        return await self._request("PATCH", self._cmd_path(guild_id, command_id), json=body)
+
+    async def delete_command(self, command_id: str, guild_id: Optional[str] = None) -> None:
+        """Tek bir komutu siler."""
+        await self._request("DELETE", self._cmd_path(guild_id, command_id))
+
+    async def delete_all_commands(self, guild_id: Optional[str] = None) -> None:
+        """Tüm global ya da sunucu komutlarını siler."""
+        await self._request("DELETE", self._cmd_path(guild_id))
 
     def on(self, event: str):
         def decorator(func: Callable):
@@ -250,7 +388,6 @@ class Bot:
         url = item["upload_url"]
         if url.startswith("/"):
             url = f"{self.origin}{url}"
-        # Önceden imzalı adrese Bot başlığı gönderilmez
         async with aiohttp.ClientSession() as session:
             async with session.put(url, data=data, headers={"Content-Type": ctype}) as resp:
                 if resp.status >= 300:
@@ -639,6 +776,7 @@ class Bot:
         if event == "READY":
             self.session_id = data.get("session_id")
             self.user = User(data.get("user") or {})
+            self.application_id = (data.get("application") or {}).get("id") or self.user.id
             self._ready = True
             log.info("Bağlandı: %s", self.user.username)
             await self._emit("ready", self)
@@ -647,6 +785,10 @@ class Bot:
         if event == "RESUMED":
             self._ready = True
             log.info("Oturum devam ettirildi")
+            return
+
+        if event == "INTERACTION_CREATE":
+            asyncio.create_task(self._safe_interaction(data))
             return
 
         if event == "MESSAGE_CREATE":
@@ -680,6 +822,47 @@ class Bot:
         except Exception:
             log.exception("Handler hatası: %s", getattr(func, "__name__", func))
             return None
+
+    async def _safe_interaction(self, data: Dict[str, Any]) -> None:
+        try:
+            await self._on_interaction(data)
+        except Exception:
+            log.exception("Etkileşim işlenirken hata")
+
+    async def _on_interaction(self, data: Dict[str, Any]) -> None:
+        ia = Interaction(data, self)
+        await self._emit("interaction_create", ia)
+
+        func: Optional[Callable] = None
+        if ia.type == InteractionType.APPLICATION_COMMAND:
+            entry = self._slash.get((ia.command_name, ia.guild_id)) or self._slash.get((ia.command_name, None))
+            func = entry["func"] if entry else None
+        elif ia.type == InteractionType.MESSAGE_COMPONENT:
+            if ia.component_type == ComponentType.STRING_SELECT:
+                func = self._selects.get(ia.custom_id)
+            else:
+                func = self._buttons.get(ia.custom_id)
+        elif ia.type == InteractionType.MODAL_SUBMIT:
+            func = self._modals.get(ia.custom_id)
+        elif ia.type == InteractionType.AUTOCOMPLETE:
+            name = ia.focused[0] if ia.focused else None
+            func = self._autocompletes.get((ia.command_name, name))
+            if func is None:
+                return
+            result = await self._call(func, ia)
+            if not ia.responded:
+                await ia.respond_choices(list(result or [])[:MAX_CHOICES] if isinstance(result, list) else [])
+            return
+        if func is None:
+            return
+
+        result = await self._call(func, ia)
+        if ia.responded:
+            return
+        if isinstance(result, str) and result:
+            await ia.respond(result)
+        else:
+            log.warning("Etkileşime yanıt verilmedi: %s", ia.command_name or ia.custom_id)
 
     async def _run_commands(self, msg: Message) -> None:
         if msg.author.bot or (self.user and msg.author.id == self.user.id):

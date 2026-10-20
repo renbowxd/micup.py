@@ -35,8 +35,8 @@ TOKEN = AYAR["MICUP_TOKEN"]
 GUILD_ID = AYAR["MICUP_GUILD_ID"]
 VOICE_CHANNEL_ID = AYAR["MICUP_VOICE_CHANNEL_ID"]
 AUTO_ROLE_ID = AYAR["MICUP_AUTO_ROLE_ID"]
-WELCOME_CHANNEL_ID = AYAR.get("MICUP_WELCOME_CHANNEL_ID", "")  # boşsa hoşgeldin mesajı atılmaz
-UPDATE_CHANNEL_ID = AYAR.get("MICUP_UPDATE_CHANNEL_ID", "")    # güncelleme duyurusu kanalı
+WELCOME_CHANNEL_ID = AYAR.get("MICUP_WELCOME_CHANNEL_ID", "")
+UPDATE_CHANNEL_ID = AYAR.get("MICUP_UPDATE_CHANNEL_ID", "")
 ADMIN_IDS = {x.strip() for x in AYAR.get("MICUP_ADMIN_IDS", "").split(",") if x.strip()}
 
 log = logging.getLogger("bot_hepsi")
@@ -79,7 +79,6 @@ async def sesde_tut():
 @bot.on("ready")
 async def hazir(b):
     global _presence_gorevi, _ses_gorevi
-    # READY her yeniden bağlanmada gelir. Görevleri sadece bir kez başlat.
     if _presence_gorevi is None or _presence_gorevi.done():
         _presence_gorevi = asyncio.create_task(presence_dongusu(aralik=2.0))
     if _ses_gorevi is None or _ses_gorevi.done():
@@ -126,17 +125,6 @@ async def hos_geldin(data):
         log.warning("Hoşgeldin mesajı atılamadı (%s): %s", user_id, _hata_metni(e))
 
 
-# ---------------------------------------------------------------------------
-# Moderasyon komutları
-#   !ban <kullanıcı_id> [sebep]
-#   !unban <kullanıcı_id>
-#   !kick <kullanıcı_id>
-#   !mute <kullanıcı_id> <dakika>     (1 - 40320 dk, yani en fazla 28 gün)
-#   !unmute <kullanıcı_id>
-#   !temizle [sayı]
-#   !surum
-# Sadece MICUP_ADMIN_IDS içindeki kullanıcılar kullanabilir (virgülle ayır).
-# ---------------------------------------------------------------------------
 
 
 def _kullanici_id(ham: str):
@@ -265,18 +253,15 @@ async def temizle(msg):
     return f"{silinen} mesaj silindi."
 
 
-SURUM_BASLIK = "micup 0.1.2 — Moderasyon, kanal ve sabitleme güncellemesi"
+SURUM_BASLIK = "micup 0.1.4 güncellemesi"
 SURUM_OZELLIKLER = [
-    ("Moderasyon", "ban, unban, kick, timeout, clear_timeout, list_bans. Denetim nedeni (reason) destekleniyor."),
-    ("Roller ve ses", "add_role, remove_role, set_voice_mute, set_voice_deaf, disconnect_member, move_member."),
-    ("Kanallar", "create_channel, edit_channel, delete_channel, set_slowmode (0-21600 sn), purge."),
-    ("Sabitleme", "pin_message, unpin_message, list_pins."),
-    ("Tepkiler", "add_reaction, remove_own_reaction, remove_user_reaction, remove_emoji_reactions, remove_all_reactions, list_reaction_users."),
-    ("Dosyalar", "send_file ile mesaja dosya ekleme (10 MB'a kadar)."),
-    ("Denetim kaydı", "list_audit_logs ile sunucu denetim kayıtlarını okuma, AuditAction sabitleri."),
-    ("Ses çalma", "voice.play_wav ile sesli kanalda WAV dosyası çalma (16-bit PCM)."),
-    ("Mesajlar ve komutlar", "send_message, edit_message, delete_message, bulk_delete, get_messages, @bot.command, @bot.on."),
-    ("Durum", "bot.set_presence(durum, afk, mobile, custom_status) ile durum ve özel metin."),
+    ("Yayın izni düzeltildi", "Yayın (ekran paylaşımı) izni artık doğru yetkiyi veriyor. Önceki sürümde yanlış bir izin veriliyordu."),
+    ("Mesaj düzenleme", "Bir mesajın hem yazısı hem embed'i düzenlenebiliyor."),
+    ("Kanal izinleri", "Kanal bazında rol ve üyelere özel izin verilip kaldırılabiliyor."),
+    ("Moderasyon", "Ban, ban kaldırma, atma, zaman aşımı ve ban listesi işlemleri destekleniyor."),
+    ("Kanal yönetimi", "Kanal oluşturma, düzenleme, silme, yavaş mod ve toplu mesaj silme."),
+    ("Tepki ve sabitleme", "Tepki ekleme ve kaldırma, mesaj sabitleme ve sabitlenenleri listeleme."),
+    ("Ses", "Sesli kanalda WAV dosyası çalınabiliyor."),
 ]
 
 
